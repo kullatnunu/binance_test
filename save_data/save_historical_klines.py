@@ -149,7 +149,8 @@ def get_historical_klines(symbol, interval, start_str, end_str=None):
 
 # start aggregated trade websocket for BNBBTC
 def process_message(msg):
-    print("message type: {}".format(msg['e']))
+    market_type = "message type: {}".format(msg['e'])
+    print(market_type)
     print(msg)
     # do something
 
@@ -158,3 +159,4 @@ from binance.websockets import BinanceSocketManager
 bm = BinanceSocketManager(client)
 bm.start_kline_socket('BTCUSDT', process_message)
 bm.start()
+
