@@ -2,9 +2,15 @@ import time
 import dateparser
 import pytz
 import json
+import redis
 
 from datetime import datetime
 from binance.client import Client
+
+# Redis setting
+r_host = "10.140.0.110"
+password = "22d652be94517645fab251ef4debf8de"
+r = redis.Redis(host=r_host, password=password)
 
 
 def date_to_milliseconds(date_str):
@@ -147,16 +153,38 @@ def get_historical_klines(symbol, interval, start_str, end_str=None):
 # print(klines)
 # ###########################
 
+
+def set_redis(input_dict):
+    r.mset(input_dict)
+    # r.mset({"Croatia": "Zagreb", "Bahamas": "Nassau"})
+    # print(r.get("Bahamas"))
+
+
 # start aggregated trade websocket for BNBBTC
 def process_message(msg):
     market_type = "message type: {}".format(msg['e'])
+    message_time = "message time: {}".format(msg['E'])
+
+    try:
+        set_redis({msg['E']: json.dumps(msg)})    # Save to redis
+    except Exception as e:
+        raise Exception(e)
+
     print(market_type)
+    print(message_time)
     print(msg)
     # do something
 
-client = Client("", "")
-from binance.websockets import BinanceSocketManager
-bm = BinanceSocketManager(client)
-bm.start_kline_socket('BTCUSDT', process_message)
-bm.start()
 
+def start_binance_socket():
+    client = Client("", "")
+    from binance.websockets import BinanceSocketManager
+    bm = BinanceSocketManager(client)
+    bm.start_kline_socket('BTCUSDT', process_message)
+    bm.start()
+
+
+if __name__ == '__main__':
+    start_binance_socket()
+    # rr = json.loads(r.get("1614609258292"))['k']['o']
+    # print(rr)
