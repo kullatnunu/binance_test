@@ -1,16 +1,61 @@
 import time
+from datetime import datetime, date, timedelta
+import argparse
 import dateparser
 import pytz
 import json
-import redis
+import pymysql
+from .mysql.klines_table.historical_klines import create_historical_klines_table
 
 from datetime import datetime
 from binance.client import Client
 
-# Redis setting
-r_host = "10.140.0.110"
-password = "22d652be94517645fab251ef4debf8de"
-r = redis.Redis(host=r_host, password=password)
+# MySQL setting
+mysqlserverip = "10.140.0.100"
+mysqlserveruser = "root"
+mysqlserverpwd = "1qaz@WSX"
+database = "binance_dev"
+
+connection = pymysql.connect(host=mysqlserverip,
+                             user=mysqlserveruser,
+                             password=mysqlserverpwd,
+                             database=database,
+                             autocommit=True)
+
+
+# args setting
+"""
+If needs data 2 hours ago:
+"python3 -m save_data.save_historical_klines -sym ETHBTC -ago 2 -ki 2h" 
+If needs data from start date until today:
+"python3 -m save_data.save_historical_klines -sym ETHUSDT -sd 2021-03-10 -ki 4h"
+If needs data in a period of time:
+"python3 -m save_data.save_historical_klines -sym ETHUSDT -sd 2021-03-10 -ed 2021-03-13 -ki 4h"
+"""
+parser = argparse.ArgumentParser()
+parser.add_argument("-sym", "--symble", help="symble input value")
+parser.add_argument("-sd", "--startdate", help="start date input value")
+parser.add_argument("-ed", "--enddate", help="end date input value")
+parser.add_argument("-ago", "--hago", help="hours ago input value")
+parser.add_argument("-ki", "--kinterval", help="k line interval, i.e. 1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M")
+args = parser.parse_args()
+
+
+def date_to_readable_format(date_str):
+    """Convert UTC date string to readable format
+    :param date_str: date string, i.e. "2021-03-13"
+    :type date_str: str
+    """
+    if int(date_str.split("-")[2]):
+        try:
+            year, month, day = int(date_str.split("-")[0]), int(date_str.split("-")[1]), int(date_str.split("-")[2])
+        except Exception:
+            raise Exception("Please input valid date value, i.e. 2021-03-13")
+        readable_time = date(year, month, day).ctime()
+        M, D, Y = readable_time.split(" ")[1], readable_time.split(" ")[2], readable_time.split(" ")[4]
+        return (f"{M} {D} {Y}")
+    else:
+        return date_str
 
 
 def date_to_milliseconds(date_str):
@@ -131,60 +176,93 @@ def get_historical_klines(symbol, interval, start_str, end_str=None):
 
     return output_data
 
-# ###########################
-# symbol = "ETHBTC"
-# start = "1 Dec, 2017"
-# end = "1 Jan, 2018"
-# interval = Client.KLINE_INTERVAL_30MINUTE
-#
-# klines = get_historical_klines(symbol, interval, start, end)
-#
-# # # open a file with filename including symbol, interval and start and end converted to milliseconds
-# # with open(
-# #     "Binance_{}_{}_{}-{}.json".format(
-# #         symbol,
-# #         interval,
-# #         date_to_milliseconds(start),
-# #         date_to_milliseconds(end)
-# #     ),
-# #     'w'  # set file write mode
-# # ) as f:
-# #     f.write(json.dumps(klines))
-# print(klines)
-# ###########################
+
+def ETHBTE_test():
+    symbol = "ETHBTC"
+    start = "1 Dec, 2017"
+    end = "1 Jan, 2018"
+    interval = Client.KLINE_INTERVAL_30MINUTE
+
+    klines = get_historical_klines(symbol, interval, start, end)
+
+    # open a file with filename including symbol, interval and start and end converted to milliseconds
+    with open(
+        "Binance_{}_{}_{}-{}.json".format(
+            symbol,
+            interval,
+            date_to_milliseconds(start),
+            date_to_milliseconds(end)
+        ),
+        'w'  # set file write mode
+    ) as f:
+        f.write(json.dumps(klines))
+    print(klines)
 
 
-def set_redis(input_dict):
-    r.mset(input_dict)
-    # r.mset({"Croatia": "Zagreb", "Bahamas": "Nassau"})
-    # print(r.get("Bahamas"))
+def create_mysql_table(sql):
+    create_connection = pymysql.connect(host=mysqlserverip,
+                                        user=mysqlserveruser,
+                                        password=mysqlserverpwd,
+                                        autocommit=True)
+    with create_connection.cursor() as cursor:
+        print(f"Craete table")
+        print(sql)
+        cursor.execute(sql)
+        create_connection.commit()
 
 
-# start aggregated trade websocket for BNBBTC
-def process_message(msg):
-    market_type = "message type: {}".format(msg['e'])
-    message_time = "message time: {}".format(msg['E'])
-
-    try:
-        set_redis({msg['E']: json.dumps(msg)})    # Save to redis
-    except Exception as e:
-        raise Exception(e)
-
-    print(market_type)
-    print(message_time)
-    print(msg)
-    # do something
+def insert_mysql_table(sql, table_name, klines):
+    with connection.cursor() as cursor:
+        print(f"Insert table name = {table_name}")
+        # print(klines)
+        print(sql)
+        cursor.executemany(sql, klines)  # Insert fetch klins to mysql table
+        connection.commit()
 
 
-def start_binance_socket():
-    client = Client("", "")
-    from binance.websockets import BinanceSocketManager
-    bm = BinanceSocketManager(client)
-    bm.start_kline_socket('BTCUSDT', process_message)
-    bm.start()
+def main():
+    symbol = args.symble    # i.e.ETCUSDT
+    start = datetime.strptime(args.startdate, "%Y-%m-%d")  # i.e."2021-03-13"
+    end = datetime.strptime(args.enddate, "%Y-%m-%d") + timedelta(days=1) if args.enddate else datetime.today() + timedelta(days=1)
+    ago = f"{args.hago} hours ago UTC"    # i.e. 3
+    interval = args.kinterval    # i.e. 4h
+
+    table_schema = f"open_time,open, high, low, close,volume, close_time, quote_asset, trades, " \
+                   f"taker_buy_base_asset_volume,taker_quote,can_be_ignored"
+    table_name = f"{symbol}_{interval}"
+    sql = f"insert into {table_name} ({table_schema}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)" \
+          f"ON duplicate KEY UPDATE open_time = open_time"
+
+    if args.hago:
+        klines = get_historical_klines(symbol, interval, ago)
+        klines = klines[:-1]  # [-1] is because get_klines function will fetch first data in next date
+        # print(klines)
+        print(f"Fetch {len(klines)} kline")
+        insert_mysql_table(sql, table_name, klines)
+    elif interval in ['2d', '3d', '1w', '1M']:
+        klines = get_historical_klines(symbol, interval, start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d'))
+        klines = klines[:-1]  # [-1] is because get_klines function will fetch first data in next date
+        print(f"Fetch {len(klines)} kline")
+        insert_mysql_table(sql, table_name, klines)
+    else:
+        print(create_historical_klines_table(args.symble, args.kinterval))
+        create_mysql_table(create_historical_klines_table(args.symble, args.kinterval))    # Create table if not exist
+
+        for n in range(int((end - start).days)):    # Calculate the date and run one by one
+            start_out = (start + timedelta(n)).strftime('%Y-%m-%d')
+            end_out = (start + timedelta(n) + timedelta(1)).strftime('%Y-%m-%d')
+            print(f"Fetch {start_out} data...")
+            klines = get_historical_klines(symbol, interval, start_out, end_out)
+            klines = klines[:-1]    # [-1] is because get_klines function will fetch first data in next date
+            # print(klines[:-1])
+            print(f"Fetch {len(klines)} kline")
+
+            insert_mysql_table(sql, table_name, klines)
 
 
 if __name__ == '__main__':
-    start_binance_socket()
-    # rr = json.loads(r.get("1614609258292"))['k']['o']
-    # print(rr)
+    # ETHBTE_test()
+    main()
+
+    # from .mysql.klines_table.historical_klines import create_historical_klines_table
+    # create_mysql_table(create_historical_klines_table(args.symble, args.kinterval))
